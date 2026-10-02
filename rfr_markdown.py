@@ -92,6 +92,8 @@ MARKDOWN_SYSTEM_PROMPT = (
     "contradict factual claims; future possibilities do not contradict present restrictions. "
     "Quote exact, nonempty substrings from both paragraphs as evidence. "
     "Use supplied paragraph identifiers, never invent identifiers or line numbers. "
+    "When an instruction conflicts with a restriction, use the instruction as paragraph "
+    "and the restriction as conflicts_with. "
     "Explain the conflict briefly. If no supported conflicts exist, return an empty diagnostics array. "
     "Depth 1 means focus on direct conflicts; depth 2 means also examine contextual relationships. "
     "Return only JSON matching the schema."
@@ -116,7 +118,8 @@ def build_request(paragraphs: list[Paragraph], depth: int) -> tuple[str, str, di
         "depth": depth,
         "paragraphs": [{"id": p.id, "heading": p.heading, "text": p.text} for p in paragraphs],
     }, ensure_ascii=False)
-    return MARKDOWN_SYSTEM_PROMPT, payload, MARKDOWN_SCHEMA
+    system = MARKDOWN_SYSTEM_PROMPT + "\nRequired JSON schema:\n" + json.dumps(MARKDOWN_SCHEMA)
+    return system, payload, MARKDOWN_SCHEMA
 
 
 def map_contradictions(text: str, paragraphs: list[Paragraph], result: dict, uri: str) -> list[dict]:

@@ -9,6 +9,11 @@ command = "/Users/thomaskenny/Documents/Default Project/red-factor-retract"
 environment = { "RFR_BACKEND" = "auto", "RFR_OPENROUTER_MODEL" = "openrouter/free", "RFR_LLM_URL" = "http://127.0.0.1:8222/v1/chat/completions", "RFR_DEPTH" = "1" }
 # Key via OPENROUTER_API_KEY env or macOS keychain. Local :8222 = offline fallback (./start-llama-8222.sh).
 
+[[language]]
+name = "markdown"
+language-servers = ["red-factor-retract"]
+auto-format = false
+
 # Optional dual-LSP: keep yaml-language-server for syntax + red-factor for semantics
 # [[language]]
 # name = "yaml"
