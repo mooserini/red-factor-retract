@@ -1,10 +1,20 @@
 from pathlib import Path
+import json
 import unittest
 
-from rfr_markdown import paragraph_range, read_paragraphs
+from rfr_markdown import build_request, map_contradictions, paragraph_range, read_paragraphs
 
 
 FIXTURE = (Path(__file__).resolve().parents[1] / "test-statements.md").read_text()
+
+
+def conflict():
+    return {
+        "paragraph": "p2", "conflicts_with": "p1",
+        "quote": "set `output_format` to OGG",
+        "conflicting_quote": "accepts only MP3 and WAV",
+        "message": "The OGG instruction violates the stated accepted output formats.",
+    }
 
 
 class ParagraphTests(unittest.TestCase):
@@ -56,6 +66,62 @@ class ParagraphTests(unittest.TestCase):
 
     def test_blank_document_has_no_claims(self):
         self.assertEqual(read_paragraphs(" \n\n"), [])
+
+
+class ContradictionTests(unittest.TestCase):
+    def setUp(self):
+        self.paragraphs = read_paragraphs(FIXTURE)
+        self.uri = "file:///example/test-statements.md"
+
+    def map(self, result):
+        return map_contradictions(FIXTURE, self.paragraphs, result, self.uri)
+
+    def test_supported_conflict_highlights_instruction_and_references_restriction(self):
+        diagnostics = self.map({"diagnostics": [conflict()]})
+        self.assertEqual(len(diagnostics), 1)
+        d = diagnostics[0]
+        self.assertEqual(d["severity"], 2)
+        self.assertEqual(d["range"]["start"], {"line": 4, "character": 0})
+        self.assertTrue(d["message"].startswith("Conflicts with the statement on line 3"))
+        self.assertIn("accepts only MP3 and WAV", d["message"])
+        self.assertIn("set `output_format` to OGG", d["message"])
+        self.assertEqual(d["relatedInformation"][0]["location"]["uri"], self.uri)
+        self.assertEqual(d["relatedInformation"][0]["location"]["range"]["start"]["line"], 2)
+
+    def test_success_with_no_conflicts_returns_empty_diagnostics(self):
+        self.assertEqual(self.map({"diagnostics": []}), [])
+
+    def test_invalid_evidence_or_shape_is_rejected(self):
+        for field, value in [
+            ("paragraph", "invented"), ("conflicts_with", "p2"),
+            ("quote", "never in the document"), ("conflicting_quote", ""),
+            ("message", 42), ("message", ""), ("paragraph", None),
+        ]:
+            with self.subTest(field=field, value=value):
+                entry = conflict()
+                entry[field] = value
+                with self.assertRaises(ValueError):
+                    self.map({"diagnostics": [entry]})
+        for result in [[], {}, {"diagnostics": {}}, {"diagnostics": [None]},
+                       {"diagnostics": [{"paragraph": "p2"}]}]:
+            with self.subTest(result=result), self.assertRaises(ValueError):
+                self.map(result)
+
+    def test_duplicate_pair_is_only_published_once(self):
+        self.assertEqual(len(self.map({"diagnostics": [conflict(), conflict()]})), 1)
+
+    def test_request_carries_exact_passages_and_context_without_yaml_constraints(self):
+        system, payload, schema = build_request(self.paragraphs, 2)
+        data = json.loads(payload)
+        self.assertEqual(data["depth"], 2)
+        self.assertEqual(data["paragraphs"][1]["id"], "p2")
+        self.assertEqual(data["paragraphs"][1]["text"], "For this renderer, set `output_format` to OGG.")
+        self.assertEqual(data["paragraphs"][1]["heading"], "Example output configuration")
+        self.assertNotIn("constraints", data)
+        self.assertEqual(set(schema["properties"]["diagnostics"]["items"]["required"]),
+                         {"paragraph", "conflicts_with", "quote", "conflicting_quote", "message"})
+        for concept in ("subject", "time", "conditions", "recommendations", "possibilities", "data"):
+            self.assertIn(concept, system.lower())
 
 
 if __name__ == "__main__":
