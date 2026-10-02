@@ -6,11 +6,11 @@ incompatible instruction, while leaving a future possibility unflagged.
 
 ## Automated checks
 
-`python3 -m unittest discover -s tests -v`: 36 tests pass.
+`python3 -m unittest discover -s tests -v`: 37 tests pass.
 `git diff --check`: passes.
 
 Checks cover passage boundaries, repeated text, ATX/setext headings, fenced
-examples, CRLF and UTF-16 positions; evidence/schema validation; document/depth
+examples including quote/list containers, CRLF and UTF-16 positions; evidence/schema validation; document/depth
 caching; correction and clearing; failure/coverage diagnostics; both inference
 backends and fallback payloads; YAML routing; and real subprocess stdio framing,
 Unicode, shutdown, and closed input pipes. Mocked inference checks exercise the
@@ -63,9 +63,9 @@ returned successfully. No personal editor configuration was changed.
   request can hit Helix's shutdown timeout; background inference/cancellation
   belongs in a subsequent increment. Ordinary idle shutdown and input-pipe EOF
   are verified.
-- This is a small prose reader, not a complete Markdown parser. Top-level fences
-  are recognized; code nested inside blockquotes or list containers is not fully
-  parsed and may be treated as prose. Such documents require a follow-up test.
+- This is a small prose reader, not a complete Markdown parser. Common fenced
+  examples inside quote/list containers are excluded and tested; complex markup
+  still requires a follow-up evaluation.
 - Markdown accepts complete documents up to 6,000 characters. The larger-file
   check explicitly reports missing coverage. YAML retains its original partial
   prompt limit and naive key mapping.

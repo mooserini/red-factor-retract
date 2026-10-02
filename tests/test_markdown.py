@@ -64,6 +64,18 @@ class ParagraphTests(unittest.TestCase):
     def test_unclosed_fence_excludes_rest_of_document(self):
         self.assertEqual([p.text for p in read_paragraphs("Claim.\n\n~~~\nIgnored forever.")], ["Claim."])
 
+    def test_fenced_examples_in_quotes_and_lists_are_excluded(self):
+        for example in (
+            "> ```\n> Only OGG.\n> ```",
+            "> > ~~~\n> > Only OGG.\n> > ~~~",
+            "- ```\n    Only OGG.\n    ```",
+            "1. ~~~~\n    Only OGG.\n    ~~~~",
+        ):
+            with self.subTest(example=example):
+                text = "A real claim.\n\n" + example + "\n\nAnother real claim."
+                self.assertEqual([p.text for p in read_paragraphs(text)],
+                                 ["A real claim.", "Another real claim."])
+
     def test_blank_document_has_no_claims(self):
         self.assertEqual(read_paragraphs(" \n\n"), [])
 

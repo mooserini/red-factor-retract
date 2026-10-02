@@ -40,15 +40,28 @@ def read_paragraphs(text: str) -> list[Paragraph]:
     while i < len(lines):
         line = lines[i]
         if fence:
-            char, length = fence
-            if re.fullmatch(r" {0,3}" + re.escape(char) + "{" + str(length) + r",}[ \t]*", line):
+            char, length, quote_depth, in_list = fence
+            closing_line = line
+            for _ in range(quote_depth):
+                quote = re.match(r"^ {0,3}>[ \t]?", closing_line)
+                if not quote:
+                    break
+                closing_line = closing_line[quote.end():]
+            indent = r"[ \t]*" if in_list else r" {0,3}"
+            if re.fullmatch(indent + re.escape(char) + "{" + str(length) + r",}[ \t]*", closing_line):
                 fence = None
             i += 1
             continue
-        opening = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        quote_prefix = re.match(r"^(?: {0,3}>[ \t]?)+", line)
+        fence_line = line[quote_prefix.end():] if quote_prefix else line
+        list_prefix = re.match(r"^ {0,3}(?:[-+*]|\d+[.)])[ \t]+", fence_line)
+        if list_prefix:
+            fence_line = fence_line[list_prefix.end():]
+        opening = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", fence_line)
         if opening and not (opening[1][0] == "`" and "`" in opening[2]):
             flush(i)
-            fence = (opening[1][0], len(opening[1]))
+            fence = (opening[1][0], len(opening[1]),
+                     quote_prefix[0].count(">") if quote_prefix else 0, bool(list_prefix))
             i += 1
             continue
         atx = re.match(r"^ {0,3}(#{1,6})(?:[ \t]+(.*?)|[ \t]*)$", line)
