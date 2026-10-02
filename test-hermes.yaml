@@ -1,0 +1,10 @@
+tts:
+  provider: xai
+  format: ogg
+  voice: aura-asteria-en
+  speed: 1.0
+pipeline:
+  output: wav
+  timing_ms: 250
+discord:
+  handoff: true

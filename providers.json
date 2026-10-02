@@ -1,0 +1,15 @@
+{
+  "xai": {
+    "note": "curated ground truth for depth-2 prompts; model must not guess",
+    "formats": ["mp3", "wav", "flac"],
+    "no_formats": ["ogg"],
+    "voices": "xai voices differ from ElevenLabs names like aura-asteria-en; flag cross-provider names"
+  },
+  "elevenlabs": {
+    "formats": ["mp3", "ogg", "wav"],
+    "voices": ["aura-asteria-en"]
+  },
+  "openai": {
+    "formats": ["mp3", "opus", "aac", "flac", "wav", "pcm"]
+  }
+}

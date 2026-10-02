@@ -1,0 +1,15 @@
+# Merge into ~/.config/helix/config.toml
+# Backtick toggles Red Factor depth 1 <-> 2 (normal <-> DeepLeaf). ~ stays case toggle.
+[keys.normal]
+"`" = ":lsp-workspace-command redFactor.setDepth"
+
+# Ghostty: CRT look lives in the terminal, not Helix.
+# Your Helix theme pops automatically under the shader.
+# Ghostty config: ~/.config/ghostty/config
+# Example:
+# theme = "kanagawa-dragon"
+# font-family = "JetBrains Mono"
+# background-opacity = 0.97
+# Add CRT/EGA shader via Ghostty `shader` option pointing at your .glsl.
+# No editor-side change needed for Red Factor colors:
+# error=deep red, warning=yellow, info/hint=green tints.
