@@ -42,11 +42,11 @@
 
 **Interfaces:** `Paragraph(id: str, heading: str, text: str, start_line: int, end_line: int)` is a frozen dataclass. `read_paragraphs(text: str) -> list[Paragraph]` groups contiguous prose between blank lines, headings and fences. IDs are `p1`, `p2`, etc., assigned in document order per request. `paragraph_range(text: str, paragraph: Paragraph) -> dict` returns a whole-paragraph LSP range using UTF-16 columns.
 
-- [ ] **Step 1: Write failing tests** in `tests/test_markdown.py` and create `test-statements.md` from the spec. Assert paragraph texts match all three statements, inline `output_format` survives, headings provide context rather than claims, and `paragraph_range(text, paragraphs[1])["start"] == {"line": 4, "character": 0}`. Add cases for repeated passages, CRLF, Unicode end columns, ATX/setext headings, backtick/tilde fences and an unclosed fence.
-- [ ] **Step 2: Verify failure.** Run `python3 -m unittest discover -s tests -p test_markdown.py -v`; expect failure because `rfr_markdown` does not yet exist.
-- [ ] **Step 3: Implement** the dataclass and both functions in `rfr_markdown.py`. Preserve raw source lines for coordinates, remove only line terminators when extracting paragraph text, and skip fenced content. Setext underline lines label the preceding heading instead of creating prose.
-- [ ] **Step 4: Verify success.** Repeat the command; all paragraph/range tests pass.
-- [ ] **Step 5: Commit** the module, fixture and tests with `feat: identify Markdown prose and source ranges`.
+- [x] **Step 1: Write failing tests** in `tests/test_markdown.py` and create `test-statements.md` from the spec. Assert paragraph texts match all three statements, inline `output_format` survives, headings provide context rather than claims, and `paragraph_range(text, paragraphs[1])["start"] == {"line": 4, "character": 0}`. Add cases for repeated passages, CRLF, Unicode end columns, ATX/setext headings, backtick/tilde fences and an unclosed fence.
+- [x] **Step 2: Verify failure.** Run `python3 -m unittest discover -s tests -p test_markdown.py -v`; expect failure because `rfr_markdown` does not yet exist.
+- [x] **Step 3: Implement** the dataclass and both functions in `rfr_markdown.py`. Preserve raw source lines for coordinates, remove only line terminators when extracting paragraph text, and skip fenced content. Setext underline lines label the preceding heading instead of creating prose.
+- [x] **Step 4: Verify success.** Repeat the command; all paragraph/range tests pass.
+- [x] **Step 5: Commit** the module, fixture and tests with `feat: identify Markdown prose and source ranges`.
 
 ### Task 2: Request and validate evidence for contradictions
 
