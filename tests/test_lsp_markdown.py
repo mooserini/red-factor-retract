@@ -3,6 +3,9 @@ import json
 import os
 from pathlib import Path
 import runpy
+import subprocess
+import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -262,6 +265,50 @@ class BackendTests(unittest.TestCase):
             self.g["call_llm"]("tts:\n  format: ogg", "save", 1)
         self.assertEqual(self.sent[0][1]["messages"][0]["content"], self.g["SYSTEM_PROMPT"])
         self.assertEqual(self.sent[0][1]["response_format"]["json_schema"]["schema"], self.g["SCHEMA"])
+
+
+class StdioTests(unittest.TestCase):
+    def run_messages(self, messages):
+        wire = b""
+        for message in messages:
+            body = json.dumps(message, ensure_ascii=False).encode()
+            wire += f"Content-Length: {len(body)}\r\n\r\n".encode() + body
+        with tempfile.TemporaryDirectory() as directory:
+            process = subprocess.Popen(
+                [sys.executable, str(ROOT / "red-factor-retract")], cwd=directory,
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                env=dict(os.environ, RFR_BACKEND="local"),
+            )
+            try:
+                output, errors = process.communicate(input=wire, timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.communicate()
+                self.fail("server did not exit after its client disconnected")
+        self.assertEqual(process.returncode, 0, errors.decode())
+        stream = io.BytesIO(output)
+        replies = []
+        while header := stream.readline():
+            size = int(header.split(b":", 1)[1])
+            self.assertEqual(stream.readline(), b"\r\n")
+            replies.append(json.loads(stream.read(size)))
+        return replies
+
+    def test_server_exits_when_client_pipe_closes(self):
+        self.assertEqual(self.run_messages([]), [])
+
+    def test_stdio_roundtrip_handles_unicode_and_returns_null_on_shutdown(self):
+        replies = self.run_messages([
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+            {"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+                "textDocument": {"uri": URI, "languageId": "markdown", "version": 7, "text": "# 😀\n"},
+            }},
+            {"jsonrpc": "2.0", "id": 2, "method": "shutdown"},
+            {"jsonrpc": "2.0", "method": "exit"},
+        ])
+        diagnostic = next(r["params"] for r in replies if r.get("method") == "textDocument/publishDiagnostics")
+        self.assertEqual(diagnostic, {"uri": URI, "version": 7, "diagnostics": []})
+        self.assertIsNone(next(r["result"] for r in replies if r.get("id") == 2))
 
 
 if __name__ == "__main__":
