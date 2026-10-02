@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""red-factor-retract — semantic blast-radius LSP for YAML (stdlib only, v1).
-Helix talks stdio JSON-RPC. We call your own llama-server :8222 with json_schema,
-map dot-paths -> LSP ranges via line search, publish diagnostics.
+"""red-factor-retract — semantic relationships LSP for YAML and Markdown.
+Helix talks stdio JSON-RPC. Hosted inference or a local llama-server returns
+diagnostics, mapped to YAML keys or evidence-backed Markdown passages.
 
 No deps. Python 3.10+.
 Env:
@@ -13,7 +13,10 @@ Env:
   RFR_TIMEOUT=20
   RFR_CONSTRAINTS=/path/to/providers.json
 """
-import sys, os, json, re, hashlib, urllib.request, urllib.error
+import sys, os, json, re, hashlib, time, urllib.request, urllib.error, urllib.parse
+from dataclasses import replace
+
+from rfr_markdown import build_request, map_contradictions, read_paragraphs
 
 LLM_URL = os.environ.get("RFR_LLM_URL", "http://127.0.0.1:8222/v1/chat/completions")
 MODEL = os.environ.get("RFR_MODEL", "gemma-4")
@@ -29,7 +32,7 @@ OR_TIMEOUT = int(os.environ.get("RFR_OPENROUTER_TIMEOUT", "60"))
 def here(p): return os.path.join(os.path.dirname(os.path.abspath(__file__)), p)
 CONSTRAINTS_PATH = os.environ.get("RFR_CONSTRAINTS", here("providers.json"))
 
-docs = {}   # uri -> {"text": str, "version": int}
+docs = {}   # uri -> {"text": str, "version": int, "languageId": str}
 depth = DEPTH
 _cache = {}
 
@@ -112,7 +115,7 @@ def get_openrouter_key():
 SECRET_PAT = re.compile(r"(?im)^(\s*(?:api[_-]?key|api[_-]?secret|token|auth[_-]?token|password|secret|private[_-]?key|access[_-]?key)\s*:\s*)(.+?)\s*$")
 
 def redact_secrets(yaml_text):
-    """Mask secret values before anything leaves the box for hosted inference."""
+    """Mask matching single-line keys; this is not a comprehensive secret filter."""
     return SECRET_PAT.sub(lambda m: m.group(1) + "[REDACTED]", yaml_text)
 
 def post_chat(url, body, headers, timeout):
@@ -126,13 +129,13 @@ def post_chat(url, body, headers, timeout):
         return parsed, resp
     raise ValueError("unexpected shape")
 
-def call_openrouter(user_payload):
+def call_openrouter(user_payload, *, system_prompt=SYSTEM_PROMPT, schema=SCHEMA):
     key = get_openrouter_key()
     if not key: raise RuntimeError("no OPENROUTER_API_KEY (env or keychain)")
     base = {
       "model": OR_MODEL, "temperature": 0, "stream": False,
       "messages": [
-        {"role":"system","content": SYSTEM_PROMPT},
+        {"role":"system","content": system_prompt},
         {"role":"user","content": user_payload}
       ],
     }
@@ -140,7 +143,7 @@ def call_openrouter(user_payload):
                "HTTP-Referer":"https://localhost/red-factor-retract", "X-Title":"Red Factor Retract"}
     # primary: strict json_schema (free router filters for capable models)
     try:
-        b = dict(base); b["response_format"] = {"type":"json_schema","json_schema":{"name":"SemanticImpact","strict":True,"schema":SCHEMA}}
+        b = dict(base); b["response_format"] = {"type":"json_schema","json_schema":{"name":"SemanticImpact","strict":True,"schema":schema}}
         parsed, resp = post_chat(OR_URL, b, headers, OR_TIMEOUT)
         log("openrouter model:", resp.get("model"))
         return parsed
@@ -158,50 +161,107 @@ def call_local(body):
             b = dict(body)
             if mode == "json_object":
                 b["response_format"] = {"type":"json_object"}
-            req = urllib.request.Request(LLM_URL, data=json.dumps(b).encode(),
-                                         headers={"Content-Type":"application/json"})
-            with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-                resp = json.loads(r.read().decode())
-            content = resp["choices"][0]["message"]["content"]
-            # strip fences if model adds them despite grammar
-            content = re.sub(r"^```(?:json)?\s*|\s*```$", "", content.strip())
-            parsed = json.loads(content)
-            if isinstance(parsed, dict) and "diagnostics" in parsed:
-                return parsed
-            log("unexpected shape, retrying"); continue
+            parsed, resp = post_chat(LLM_URL, b, {"Content-Type":"application/json"}, TIMEOUT)
+            log("local model:", resp.get("model"))
+            return parsed
         except Exception as e:
             log(f"llm {mode} failed:", e)
-    return {"diagnostics": []}
+    raise RuntimeError("local backend failed or returned an invalid response")
+
+def request_analysis(user_payload, *, system_prompt, schema):
+    if BACKEND in ("auto", "openrouter"):
+        try:
+            return call_openrouter(user_payload, system_prompt=system_prompt, schema=schema)
+        except Exception as e:
+            log("openrouter failed:", e)
+            if BACKEND == "openrouter":
+                raise
+            log("falling back to local")
+    body = {
+      "model": MODEL, "temperature": 0, "stream": False,
+      "messages": [
+        {"role":"system","content": system_prompt},
+        {"role":"user","content": user_payload}
+      ],
+      "response_format": {"type":"json_schema","json_schema":{"name":"SemanticImpact","schema":schema}}
+    }
+    return call_local(body)
 
 def call_llm(yaml_text, changed_info, depth_level):
     constraints = load_constraints() if depth_level >= 2 else {}
-    safe_yaml = redact_secrets(yaml_text)  # hosted backends never see secrets
+    safe_yaml = redact_secrets(yaml_text)
     user_payload = (
 f"Depth: {depth_level}\nChanged: {changed_info}\n"
 "YAML:\n```yaml\n" + safe_yaml[:6000] + "\n```\n"
 + (f"Known constraints:\n{json.dumps(constraints)[:2000]}" if constraints else "Known constraints: (none, use general reasoning)")
     )
-    if BACKEND in ("auto", "openrouter"):
-        try:
-            return call_openrouter(user_payload)
-        except Exception as e:
-            log("openrouter failed:", e)
-            if BACKEND == "openrouter":
-                return {"diagnostics": []}
-            log("falling back to local")
-    body = {
-      "model": MODEL, "temperature": 0, "stream": False,
-      "messages": [
-        {"role":"system","content": SYSTEM_PROMPT},
-        {"role":"user","content": user_payload}
-      ],
-      "response_format": {"type":"json_schema","json_schema":{"name":"SemanticImpact","schema":SCHEMA}}
+    return request_analysis(user_payload, system_prompt=SYSTEM_PROMPT, schema=SCHEMA)
+
+def is_markdown(uri, doc):
+    language = doc.get("languageId", "").lower()
+    if language:
+        return language == "markdown"
+    return urllib.parse.unquote(urllib.parse.urlparse(uri).path).lower().endswith((".md", ".markdown"))
+
+def markdown_status(uri, message):
+    first_line = docs.get(uri, {}).get("text", "").splitlines()
+    end = len(first_line[0][:1].encode("utf-16-le")) // 2 if first_line else 0
+    return {
+        "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": end}},
+        "severity": 3, "source": "red-factor", "code": "markdown-analysis-status",
+        "message": message,
     }
-    return call_local(body)
+
+def infer_markdown_and_publish(uri):
+    doc = docs.get(uri)
+    if doc is None:
+        return
+    text = doc.get("text", "")
+
+    def publish(diagnostics):
+        send_notification("textDocument/publishDiagnostics", {
+            "uri": uri, "version": doc.get("version", 0), "diagnostics": diagnostics,
+        })
+
+    if len(text) > 6000:
+        publish([markdown_status(uri, "Markdown not analyzed: this first version accepts complete documents up to 6,000 characters.")])
+        return
+    paragraphs = read_paragraphs(text)
+    if not paragraphs:
+        publish([])
+        return
+    key = "markdown:" + hashlib.sha256(json.dumps([uri, text, depth]).encode()).hexdigest()
+    if key in _cache:
+        publish(_cache[key])
+        return
+    started = time.monotonic()
+    # Mask each passage without re-parsing: redaction must not reassign source IDs.
+    safe_paragraphs = [replace(p, text=redact_secrets(p.text), heading=redact_secrets(p.heading)) for p in paragraphs]
+    system, payload, schema = build_request(safe_paragraphs, depth)
+    try:
+        result = request_analysis(payload, system_prompt=system, schema=schema)
+    except Exception as e:
+        log("markdown backend failed:", e)
+        publish([markdown_status(uri, "Markdown analysis failed; no conclusion was reached. Save or use the depth command to retry.")])
+        return
+    try:
+        out = map_contradictions(text, paragraphs, result, uri)
+    except ValueError as e:
+        log("markdown invalid response:", e)
+        publish([markdown_status(uri, "Markdown analysis returned invalid evidence; no conclusion was reached. Save or use the depth command to retry.")])
+        return
+    log(f"markdown analysis: {len(paragraphs)} passages, {len(out)} conflicts, {time.monotonic() - started:.2f}s")
+    _cache[key] = out
+    if len(_cache) > 64:
+        _cache.pop(next(iter(_cache)))
+    publish(out)
 
 def infer_and_publish(uri, changed_info="full file"):
     global _cache
     doc = docs.get(uri, {})
+    if is_markdown(uri, doc):
+        infer_markdown_and_publish(uri)
+        return
     text = doc.get("text", "")
     if not text.strip():
         send_notification("textDocument/publishDiagnostics", {"uri":uri,"diagnostics":[]}); return
@@ -243,7 +303,7 @@ def send(msg):
     _out.write(f"Content-Length: {len(b)}\r\n\r\n".encode()); _out.write(b); _out.flush()
 
 def send_response(id_, result):
-    send({"jsonrpc":"2.0","id":id_,"result":result or {}})
+    send({"jsonrpc":"2.0","id":id_,"result":result})
 
 def send_error(id_, msg):
     send({"jsonrpc":"2.0","id":id_,"error":{"code":-32603,"message":msg}})
@@ -266,27 +326,32 @@ def handle(msg):
     global depth
     method = msg.get("method",""); id_ = msg.get("id"); p = msg.get("params",{}) or {}
     if method == "initialize":
-        send_response(id_, {"capabilities":{"textDocumentSync":1,
+        send_response(id_, {"capabilities":{"textDocumentSync":{"openClose":True,"change":1,"save":{"includeText":True}},
             "executeCommandProvider":{"commands":["redFactor.setDepth"]}}})
     elif method in ("initialized","$/setTrace","workspace/didChangeConfiguration"):
         pass
     elif method == "shutdown":
-        send_response(id_, {}); return "shutdown"
+        send_response(id_, None); return "shutdown"
     elif method == "exit":
         sys.exit(0)
     elif method == "textDocument/didOpen":
-        td = p.get("textDocument",{}); docs[td.get("uri","")] = {"text":td.get("text",""),"version":td.get("version",0)}
+        td = p.get("textDocument",{}); docs[td.get("uri","")] = {"text":td.get("text",""),"version":td.get("version",0),"languageId":td.get("languageId","")}
         infer_and_publish(td.get("uri",""), "open")
     elif method == "textDocument/didChange":
         td = p.get("textDocument",{}); uri = td.get("uri","")
         changes = p.get("contentChanges",[])
         if changes and "text" in changes[-1]:
-            docs[uri] = {"text":changes[-1]["text"],"version":td.get("version",0)}
+            docs.setdefault(uri, {}).update({"text":changes[-1]["text"],"version":td.get("version",0)})
         # v1: don't infer on every keystroke; wait for save/hotkey. Still update buffer.
     elif method == "textDocument/didSave":
         td = p.get("textDocument",{}); uri = td.get("uri","")
-        if "text" in (p.get("text") or {}): docs[uri] = {"text":p["text"],"version":0}
+        if uri not in docs: return
+        if isinstance(p.get("text"), str): docs[uri]["text"] = p["text"]
         infer_and_publish(uri, "save")
+    elif method == "textDocument/didClose":
+        uri = p.get("textDocument",{}).get("uri","")
+        docs.pop(uri, None)
+        send_notification("textDocument/publishDiagnostics", {"uri":uri,"diagnostics":[]})
     elif method == "workspace/executeCommand":
         cmd = p.get("command",""); args = p.get("arguments",[]) or []
         if cmd == "redFactor.setDepth":
@@ -308,7 +373,7 @@ def main():
     while True:
         try: msg = read_msg()
         except Exception as e: log("read err:",e); continue
-        if msg is None: continue
+        if msg is None: break
         try:
             if handle(msg) == "shutdown": continue
         except Exception as e:
